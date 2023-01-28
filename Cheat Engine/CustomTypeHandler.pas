@@ -669,6 +669,7 @@ begin
   oldScriptUsesFloat:=fScriptUsesFloat;
   oldScriptUsesCDecl:=fScriptUsesCDecl;
   oldScriptUsesString:=fScriptUsesString;
+  oldstringsize:=textbuffersize;;
 
   try
     //if anything goes wrong the old values get set back
@@ -687,6 +688,7 @@ begin
           newpreferedalignment:=-1;
           newScriptUsesFloat:=false;
           newScriptUsesCDecl:=false;
+          newScriptUsesString:=false;
 
           //find alloc "ConvertRoutine"
           for i:=0 to length(newdisableinfo.allocs)-1 do

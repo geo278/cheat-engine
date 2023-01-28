@@ -5,6 +5,10 @@
 #include "Metadata.h"
 #endif
 
+
+                                //yyyymmdd
+#define MONO_DATACOLLECTORVERSION 20221207 
+
 #define MONOCMD_INITMONO 0
 #define MONOCMD_OBJECT_GETCLASS 1
 #define MONOCMD_ENUMDOMAINS 2
@@ -53,9 +57,12 @@
 #define MONOCMD_GETIMAGEFILENAME 44
 #define MONOCMD_GETCLASSNESTINGTYPE 45
 #define MONOCMD_LIMITEDCONNECTION 46
+#define MONOCMD_GETMONODATACOLLECTORVERSION 47
+#define MONOCMD_NEWSTRING 48
 
 
 typedef struct {} MonoType;
+typedef struct {} MonoObject;
 typedef struct {} MonoMethodSignature;
 typedef void * gpointer;
 
@@ -139,7 +146,7 @@ typedef int (__cdecl *MONO_JIT_INFO_GET_CODE_SIZE)(void *jitinfo);
 typedef int (__cdecl *MONO_JIT_EXEC)(void *domain, void *assembly, int argc, char *argv[]);
 	
 
-
+typedef uint32_t (__cdecl *MONO_METHOD_GET_FLAGS)(void *method, uint32_t *iflags);
 typedef void* (__cdecl *MONO_METHOD_GET_HEADER)(void *method);
 typedef void* (__cdecl *MONO_METHOD_GET_CLASS)(void *method);
 typedef void* (__cdecl *MONO_METHOD_SIG)(void *method);
@@ -176,7 +183,7 @@ typedef void* (__cdecl *MONO_OBJECT_NEW)(void *domain, void *klass);
 typedef void  (__cdecl *MONO_FREE)(void*);
 
 typedef void* (__cdecl *MONO_METHOD_DESC_SEARCH_IN_IMAGE)(void *desc, void *image);
-typedef void* (__cdecl *MONO_RUNTIME_INVOKE)(void *method, void *obj, void **params, void **exc);
+typedef void* (__cdecl *MONO_RUNTIME_INVOKE)(void *method, void *obj, void **params, MonoObject **exc);
 typedef void* (__cdecl *MONO_RUNTIME_INVOKE_ARRAY)(void *method, void *obj, void *params, void **exc);
 typedef void* (__cdecl *MONO_RUNTIME_OBJECT_INIT)(void *object);
 
@@ -285,6 +292,7 @@ private:
 	MONO_TYPE_GET_NAME_FULL mono_type_get_name_full;
 	MONO_FIELD_GET_FLAGS mono_field_get_flags;
 
+	MONO_METHOD_GET_FLAGS mono_method_get_flags;
 	MONO_METHOD_GET_NAME mono_method_get_name;
 	MONO_METHOD_GET_HEADER mono_method_get_header;
 	MONO_METHOD_GET_CLASS mono_method_get_class;
@@ -364,7 +372,7 @@ private:
 	BOOL il2cpp;
 
 	BOOL UWPMode;
-	
+	void* domain;
 
 	void CreatePipeandWaitForconnect(void);
 
@@ -415,6 +423,8 @@ private:
     void FillOptionalFunctionList(); //mainly for unixbased systems
 	void GetStaticFieldValue();
 	void SetStaticFieldValue();
+	void GetMonoDataCollectorVersion();
+	void NewString();
 
 public:
 	CPipeServer(void);
@@ -427,13 +437,13 @@ public:
 	void WriteString1(const char*);
 	void FreeString(char*);
 
-	void *ReadObjectArray(void* domain);
-	void FreeObjectArray(void *arr);
-	int GetObjectArraySize(void *arr);
-	void **GetObjectArrayArgs(void *arr);
+	//void *ReadObjectArray(void* domain);
+	//void FreeObjectArray(void *arr);
+	//int GetObjectArraySize(void *arr);
+	//void **GetObjectArrayArgs(void *arr);
 
-	int GetObjectSize(int);
-	void* ReadObject(void* domain, MonoTypeEnum type, void* addr);
-	void WriteObject(void*);
-	void WriteEmptyObject();
+	//int GetObjectSize(int);
+	//void* ReadObject(void* domain, MonoTypeEnum type, void* addr);
+	//void WriteObject(void*);
+	//void WriteEmptyObject();
 };
