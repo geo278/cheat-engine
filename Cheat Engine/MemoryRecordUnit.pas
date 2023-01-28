@@ -103,13 +103,15 @@ type
   TMemoryRecordActivateEvent=function (sender: TObject; before, currentstate: boolean): boolean of object;
   TGetDisplayValueEvent=function(sender: TObject; var value: string): boolean of object;
 
+  TMemoryRecordChangedValueEvent=procedure (sender: TObject; oldvalue: string; newvalue: string) of object;
+
   TMemoryRecord=class
   private
     fID: integer;
-    FrozenValue : string;
-    CurrentValue: string;
-    UndoValue   : string;  //keeps the last value before a manual edit
-
+    FrozenValue   : string;
+    CurrentValue  : string;
+    UndoValue     : string;  //keeps the last value before a manual edit
+    LastSeenValue : string;
 
     UnreadablePointer: boolean;
     BaseAddress: ptrUint; //Base address
@@ -172,6 +174,8 @@ type
     fonactivate, fondeactivate: TMemoryRecordActivateEvent;
     fOnDestroy: TNotifyEvent;
     fOnGetDisplayValue: TGetDisplayValueEvent;
+
+    fOnValueChanged, fOnValueChangedByUser: TMemoryRecordChangedValueEvent;
 
     fpointeroffsets: array of TMemrecOffset; //if longer than 0, this is a pointer
 
@@ -378,6 +382,9 @@ type
     property Description: string read fDescription write setDescription;
     property CachedAddress: ptruint read realAddress;
     property HasMouseFocus: boolean read hasMouseOver;
+
+    property OnValueChanged: TMemoryRecordChangedValueEvent read fOnValueChanged write fOnValuechanged;
+    property OnValueChangedByUser: TMemoryRecordChangedValueEvent read fOnValueChangedByUser write fOnValueChangedByUser;
   end;
 
   THKSoundFlag=(hksPlaySound=0, hksSpeakText=1, hksSpeakTextEnglish=2); //playSound excludes speakText
@@ -400,6 +407,7 @@ type
     keys: Tkeycombo;
     fAction: TMemrecHotkeyAction;
     fValue: string;
+    fActive: boolean;
 
     Down: boolean;
 
@@ -428,6 +436,7 @@ type
     property ID: integer read fID;
     property OnHotkey: TNotifyEvent read fOnHotkey write fOnHotkey;
     property OnPostHotkey: TNotifyEvent read fOnPostHotkey write fOnPostHotkey;
+    property Active: boolean read fActive write fActive;
   end;
 
   TMemoryRecordProcessingThread=class(TThread)
@@ -707,6 +716,8 @@ begin
   fowner.hotkeylist.Add(self);
 
   keys[0]:=0;
+
+  factive:=true;
 
 end;
 
@@ -1574,6 +1585,10 @@ begin
 
         if tempnode.ChildNodes[i].NodeName='Hotkey' then
         begin
+          a:=tempnode.ChildNodes[i].Attributes.GetNamedItem('Active');
+          if a<>nil then
+            hk.Active:=a.TextContent<>'0';
+
           a:=tempnode.ChildNodes[i].Attributes.GetNamedItem('OnlyWhileDown');
           if (a<>nil) then
             hk.OnlyWhileDown:=a.TextContent='1';
@@ -1998,12 +2013,22 @@ begin
     begin
       hk:=hks.AppendChild(doc.CreateElement('Hotkey'));
       hk.AppendChild(doc.CreateElement('Action')).TextContent:=MemRecHotkeyActionToText(hotkey[i].action);
+
+      if hotkey[i].Active=false then
+      begin
+        a:=doc.CreateAttribute('Active');
+        a.TextContent:='0';
+        hk.Attributes.SetNamedItem(a);
+      end;
+
       if hotkey[i].OnlyWhileDown then
       begin
         a:=doc.CreateAttribute('OnlyWhileDown');
         a.TextContent:='1';
         hk.Attributes.SetNamedItem(a);
       end;
+
+
 
       hkkc:=hk.AppendChild(doc.createElement('Keys'));
       j:=0;
@@ -2867,7 +2892,7 @@ begin
   begin
     try
 
-      if allowIncrease or allowDecrease then
+      if allowIncrease or allowDecrease  then
       begin
         //get the new value
         oldvalue:=frozenValue;
@@ -2875,6 +2900,8 @@ begin
         if showashex or (VarType in [vtByte..vtQword, vtCustom]) then
         begin
           //handle as a decimal
+
+
 
 
           if showAsHex then
@@ -2888,8 +2915,10 @@ begin
             olddecimalvalue:=StrToQWordEx(oldvalue);
           end;
 
-          if (allowIncrease and (newdecimalvalue>olddecimalvalue)) or
-             (allowDecrease and (newdecimalvalue<olddecimalvalue))
+          if (allowIncrease and ShowAsSigned and (int64(newdecimalvalue)>int64(olddecimalvalue))) or
+             (allowIncrease and (not ShowAsSigned) and (newdecimalvalue>olddecimalvalue)) or
+             (allowDecrease and (ShowAsSigned) and (int64(newdecimalvalue)<int64(olddecimalvalue))) or
+             (allowDecrease and (not ShowAsSigned) and (newdecimalvalue<olddecimalvalue))
           then
             frozenvalue:=newvalue;
 
@@ -3140,6 +3169,11 @@ begin
   end;
 
   freememandnil(buf);
+
+  if assigned(fOnValueChanged) and (result<>LastSeenValue) then
+    fOnValueChanged(self, LastSeenValue, result);
+
+  LastSeenValue:=result;
 end;
 
 function TMemoryrecord.canUndo: boolean;
@@ -3352,6 +3386,7 @@ begin
   if fisGroupHeader then exit;
 
 
+
   currentValue:={utf8toansi}(v);
 
   if fShowAsHex and (not (vartype in [vtSingle, vtDouble, vtByteArray, vtString] )) then
@@ -3381,6 +3416,7 @@ begin
 
   getmem(buf,bufsize+2);
 
+  suspended:=false;
   if SystemSupportsWritableExecutableMemory or SkipVirtualProtectEx then
   begin
     vpe:=(SkipVirtualProtectEx=false) and VirtualProtectEx(processhandle, pointer(realAddress), bufsize, PAGE_EXECUTE_READWRITE, originalprotection);
@@ -3389,8 +3425,13 @@ begin
   begin
     if (SkipVirtualProtectEx=false) and (iswritable(realaddress)=false) then
     begin
-      suspended:=true;
-      ntsuspendProcess(processhandle);
+
+      if processid<>GetCurrentProcessId then
+      begin
+        ntsuspendProcess(processhandle);
+        suspended:=true;
+      end;
+
       vpe:=(SkipVirtualProtectEx=false) and VirtualProtectEx(processhandle, pointer(realAddress), bufsize, PAGE_READWRITE, originalprotection);
     end;
   end;
@@ -3589,8 +3630,17 @@ begin
 
   frozenValue:=unparsedvalue;     //we got till the end, so update the frozen value
 
-  if (not isfreezer) and (GetValue<>newundovalue) then
-    undovalue:=newundovalue;
+  if (not isfreezer) then
+  begin
+    if (GetValue<>newundovalue) then
+      undovalue:=newundovalue;
+
+    if assigned(fOnValueChangedByUser) then
+      fOnValueChangedByUser(self, newundovalue, LastSeenValue);
+  end;
+
+
+
 
 end;
 

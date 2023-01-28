@@ -21,6 +21,8 @@ local dpiscale=getScreenDPI()/96
 
 mono_timeout=3000 --change to 0 to never timeout (meaning: 0 will freeze your face off if it breaks on a breakpoint, just saying ...)
 
+MONO_DATACOLLECTORVERSION=20221207
+
 MONOCMD_INITMONO=0
 MONOCMD_OBJECT_GETCLASS=1
 MONOCMD_ENUMDOMAINS=2
@@ -70,6 +72,8 @@ MONOCMD_FREE=43
 MONOCMD_GETIMAGEFILENAME=44
 MONOCMD_GETCLASSNESTINGTYPE=45
 MONOCMD_LIMITEDCONNECTION=46
+MONOCMD_GETMONODATACOLLECTORVERSION=47
+MONOCMD_NEWSTRING=48
 
 
 MONO_TYPE_END        = 0x00       -- End of List
@@ -124,7 +128,7 @@ monoTypeToVartypeLookup[MONO_TYPE_I8]=vtQword
 monoTypeToVartypeLookup[MONO_TYPE_U8]=vtQword
 monoTypeToVartypeLookup[MONO_TYPE_R4]=vtSingle
 monoTypeToVartypeLookup[MONO_TYPE_R8]=vtDouble
-monoTypeToVartypeLookup[MONO_TYPE_STRING]=vtPointer --pointer to a string object
+monoTypeToVartypeLookup[MONO_TYPE_STRING]=vtString --pointer to a string object
 monoTypeToVartypeLookup[MONO_TYPE_PTR]=vtPointer
 monoTypeToVartypeLookup[MONO_TYPE_BYREF]=vtPointer
 monoTypeToVartypeLookup[MONO_TYPE_CLASS]=vtPointer
@@ -176,6 +180,33 @@ FIELD_ATTRIBUTE_RT_SPECIAL_NAME=0x0400
 FIELD_ATTRIBUTE_HAS_FIELD_MARSHAL=0x1000
 FIELD_ATTRIBUTE_HAS_DEFAULT=0x8000
 FIELD_ATTRIBUTE_HAS_FIELD_RVA=0x0100
+
+METHOD_ATTRIBUTE_MEMBER_ACCESS_MASK      =0x0007
+METHOD_ATTRIBUTE_COMPILER_CONTROLLED     =0x0000
+METHOD_ATTRIBUTE_PRIVATE                 =0x0001
+METHOD_ATTRIBUTE_FAM_AND_ASSEM           =0x0002
+METHOD_ATTRIBUTE_ASSEM                   =0x0003
+METHOD_ATTRIBUTE_FAMILY                  =0x0004
+METHOD_ATTRIBUTE_FAM_OR_ASSEM            =0x0005
+METHOD_ATTRIBUTE_PUBLIC                  =0x0006
+
+METHOD_ATTRIBUTE_STATIC                  =0x0010
+METHOD_ATTRIBUTE_FINAL                   =0x0020
+METHOD_ATTRIBUTE_VIRTUAL                 =0x0040
+METHOD_ATTRIBUTE_HIDE_BY_SIG             =0x0080
+
+METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK      =0x0100
+METHOD_ATTRIBUTE_REUSE_SLOT              =0x0000
+METHOD_ATTRIBUTE_NEW_SLOT                =0x0100
+
+METHOD_ATTRIBUTE_STRICT                  =0x0200
+METHOD_ATTRIBUTE_ABSTRACT                =0x0400
+METHOD_ATTRIBUTE_SPECIAL_NAME            =0x0800
+
+METHOD_ATTRIBUTE_PINVOKE_IMPL            =0x2000
+METHOD_ATTRIBUTE_UNMANAGED_EXPORT        =0x0008
+ 
+    
 
 MONO_TYPE_NAME_FORMAT_IL=0
 MONO_TYPE_NAME_FORMAT_REFLECTION=1
@@ -430,7 +461,6 @@ function monoIL2CPPSymbolEnum(t)
       images[i].handle=mono_getImageFromAssembly(assemblies[i])
       images[i].name=mono_image_get_name(images[i].handle)
       images[i].parsed=false
-      
       if images[i].name=='Assembly-CSharp.dll' then
         priority=i
       end
@@ -584,54 +614,80 @@ function LaunchMonoDataCollector(internalReconnectDisconnectEachTime)
 
 
   local dllname
+  local dllpath
   
-  if getOperatingSystem()==0 then
-    dllname="MonoDataCollector"
-    if targetIs64Bit() then
-      dllname=dllname.."64.dll"
-    else
-      dllname=dllname.."32.dll"
+  local skipsymbols=true
+  
+  
+  if isConnectedToCEServer() then
+    local basename='libMonoDataCollector'
+    if targetIsAndroid() then
+      dllname=basename    
+    else    
+      --assume linux
+      dllname=basename..'-linux'     
     end
     
+    if targetIsArm() then
+      if targetIs64Bit() then
+        dllname=dllname..'-aarch64.so'
+      else
+        dllname=dllname..'-arm.so'
+      end      
+    else
+      if targetIs64Bit() then
+        dllname=dllname..'-x86_64.so'
+      else
+        dllname=dllname..'-i386.so'
+      end
+    end
     
-    autoAssemble([[
-      mono-2.0-bdwgc.mono_error_ok:
-      mov eax,1
-      ret
-    ]]) --don't care if it fails
-
-
+    dllpath=getCEServerPath()..dllname
   else
+    if getOperatingSystem()==0 then
+      skipsymbols=false --for the alternative (can not create pipes) situation
+      dllname="MonoDataCollector"
+      if targetIs64Bit() then
+        dllname=dllname.."64.dll"
+      else
+        dllname=dllname.."32.dll"
+      end
     
-    dllname='libMonoDataCollectorMac.dylib'
-  end
-  
-  local skipsymbols=getOperatingSystem()==1  --do not skip symbols if windows. 
+    
+      autoAssemble([[
+        mono-2.0-bdwgc.mono_error_ok:
+        mov eax,1
+        ret
+      ]]) --don't care if it fails
 
-  local injectResult, injectError=injectLibrary(getAutorunPath()..libfolder..pathsep..dllname, skipsymbols)
-  if not injectResult then
-    if injectError then
-      print(translate("Failure injecting the MonoDatacollector library"..":"..injectError))
+
     else
-      print(translate("Failure injecting the MonoDatacollector library. No error given"))
-    end
-    return 0
+      dllname='libMonoDataCollectorMac.dylib'
+    end  
+    
+    dllpath=getAutorunPath()..libfolder..pathsep..dllname   
   end
   
-  if (getOperatingSystem()==0) and (getAddressSafe("MDC_ServerPipe")==nil) then
+ -- printf("Injecting %s\n", dllpath);
+
+
+  local injectResult, injectError=injectLibrary(dllpath, skipsymbols)
+  if (not injectResult) and isConnectedToCEServer() then --try the searchpath
+    injectResult, injectError=injectLibrary(dllname, skipsymbols)      
+  end
+    
+  if (skipsymbols==false) and (getAddressSafe("MDC_ServerPipe")==nil) then
     waitForExports()
     if getAddressSafe("MDC_ServerPipe")==nil then
       print("DLL Injection failed or invalid DLL version")
       return 0
     end
   end
-  
 
-  
   --wait till attached
   local timeout=getTickCount()+5000
   while (monopipe==nil) and (getTickCount()<timeout) do
-    if (getOperatingSystem()==0) and (readInteger(getAddressSafe("MDC_ServerPipe"))==0xdeadbeef) then
+    if (skipsymbols==false) and (readInteger(getAddressSafe("MDC_ServerPipe"))==0xdeadbeef) then
       --likely an UWP target which can not create a named pipe
       --print("UWP situation")
       local serverpipe=createPipe('cemonodc_pid'..getOpenedProcessID(), 256*1024,1024)      
@@ -648,6 +704,17 @@ function LaunchMonoDataCollector(internalReconnectDisconnectEachTime)
   if (monopipe==nil) then
     return 0 --failure
   end
+  
+  local v=mono_getMonoDatacollectorDLLVersion();
+  if (v==nil) or (v~=MONO_DATACOLLECTORVERSION) then
+    local s='There is an inconsistency with the monodatacollector dll and monoscript.lua . Unexpected behaviour and crashes are to be expected'
+    if inMainThread then
+      messageDialog(s, mtWarning)
+    else
+      print('Warning:'..s)
+    end
+  end
+    
   
   monopipe.OnError=function(self)
     --print("monopipe error")
@@ -693,6 +760,9 @@ function LaunchMonoDataCollector(internalReconnectDisconnectEachTime)
     --  print("monopipe error. Last reattach too soon. Giving up")
     end
     
+    
+
+    
     lastMonoError=getTickCount()
     
   end
@@ -708,8 +778,9 @@ function LaunchMonoDataCollector(internalReconnectDisconnectEachTime)
   monopipe.ProcessID=getOpenedProcessID()
   monoBase=monopipe.readQword()
   
-  if (monoBase==nil) or (monobase==0) then
-    return 0;
+  if (monoBase==nil) or (monoBase==0) then
+    print("Mono not usable in target")
+    return 0
   end
 
 
@@ -732,9 +803,7 @@ function LaunchMonoDataCollector(internalReconnectDisconnectEachTime)
 
   end
 
-  if (monoSettings==nil) then
-    monoSettings=getSettings("MonoExtension")  
-  end
+
   
   StructureElementCallbackID=registerStructureAndElementListCallback(mono_StructureListCallback, mono_ElementListCallback)
 
@@ -1089,6 +1158,19 @@ function mono_enumDomains()
 
   return result
 end
+
+function mono_getMonoDatacollectorDLLVersion()
+  local r=nil
+  monopipe.lock()
+  monopipe.writeByte(MONOCMD_GETMONODATACOLLECTORVERSION)
+  r=monopipe.readDword()  
+  if monopipe then
+    monopipe.unlock()
+  end
+  
+  return r
+end
+
 
 function mono_setCurrentDomain(domain)
   --if debug_canBreak() then return nil end
@@ -1487,7 +1569,25 @@ end
 
 --todo for the instance scanner: Get the fields and check that pointers are either nil or point to a valid address
 function mono_class_findInstancesOfClassListOnly(domain, klass, progressBar)
+
+  if debugInstanceLookup then 
+    if progressBar then
+      printf("progressBar is set. progressBar.ClassName=%s", progressBar.ClassName)
+    end
+  
+    print("mono_class_findInstancesOfClassListOnly")     
+  end
+
   local vtable=mono_class_getVTable(domain, klass)
+  if debugInstanceLookup then 
+    if vtable then
+      printf("vtable is %x", vtable)
+    else
+      print("vtable is nil") 
+    end
+  end
+
+  
   if (vtable) and (vtable~=0) then
     local ms=createMemScan(progressBar)  
     local scantype=vtDword
@@ -1497,7 +1597,10 @@ function mono_class_findInstancesOfClassListOnly(domain, klass, progressBar)
     
     ms.firstScan(soExactValue,scantype,rtRounded,string.format('%x',vtable),'', 0,0x7ffffffffffffffff, '', fsmAligned, "8",true, true,false,false)
 
-    ms.waitTillDone()  
+    ms.waitTillDone() 
+    if debugInstanceLookup then     
+      print("after ms.waitTillDone")
+    end
     
     local fl=createFoundList(ms)
     fl.initialize()
@@ -1508,8 +1611,13 @@ function mono_class_findInstancesOfClassListOnly(domain, klass, progressBar)
       result[i+1]=tonumber('0x'..fl[i])
     end
     
+    if debugInstanceLookup then print("Destroying fl and ms") end
+    
     fl.destroy()    
-    ms.destroy()    
+    ms.destroy()  
+    if debugInstanceLookup then 
+      printf("end of mono_class_findInstancesOfClassListOnly with valid vtable. #result=%d", #result)    
+    end
     
     return result
   end
@@ -1891,8 +1999,9 @@ function mono_class_enumMethods(class, includeParents)
       local namelength;
       methods[index]={}
       methods[index].method=method
-      namelength=monopipe.readWord();
-      methods[index].name=monopipe.readString(namelength);
+      namelength=monopipe.readWord()
+      methods[index].name=monopipe.readString(namelength)
+      methods[index].flags=monopipe.readDword()
       index=index+1
     end
 
@@ -2347,6 +2456,8 @@ function mono_method_getSignature(method)
   monopipe.writeQword(method)
 
   local paramcount=monopipe.readByte()
+  if paramcount==nil then return nil end --invalid method (monopipe is likely dead now)
+  
   local i
   
   for i=1, paramcount do
@@ -2415,7 +2526,9 @@ function mono_method_getClass(method)
   monopipe.writeQword(method)
   local result=monopipe.readQword()
 
-  monopipe.unlock()
+  if monopipe then
+    monopipe.unlock()
+  end
 
   return result;
 end
@@ -2522,7 +2635,7 @@ end
 function mono_readObject()
   local vtype = monopipe.readByte()
   if vtype == MONO_TYPE_VOID then
-    return nil
+    return monopipe.readQword()
   elseif vtype == MONO_TYPE_STRING then
     local resultlength=monopipe.readWord();
     return monopipe.readString(resultlength);
@@ -2547,39 +2660,101 @@ function mono_readObject()
   return nil
 end
 
+--[[function mono_readObject()
+  local vtype = monopipe.readByte()
+  if vtype == MONO_TYPE_VOID then
+    return nil
+  elseif vtype == MONO_TYPE_STRING then
+    local resultlength=monopipe.readWord();
+    return monopipe.readString(resultlength);
+  end
+  
+  local vartype = monoTypeToVartypeLookup[vtype]
+  if vartype == vtByte then
+    return monopipe.readByte()
+  elseif vartype == vtWord then
+    return monopipe.readWord()
+  elseif vartype == vtDword then
+    return monopipe.readDword()
+  elseif vartype == vtQword then
+    return monopipe.readQword()
+  elseif vartype == vtSingle then
+    return monopipe.readFloat()
+  elseif vartype == vtDouble then
+    return monopipe.readDouble()
+  elseif vartype == vtPointer then
+    return monopipe.readQword()
+  end  
+  return nil
+end]]
+
 function mono_writeObject(vartype, value)
   if vartype == vtString then
-    -- monopipe.writeByte(MONO_TYPE_STRING)
+    monopipe.writeByte(MONO_TYPE_STRING)
     monopipe.writeWord(#value);
     monopipe.writeString(value);
   elseif vartype == vtByte then
-    -- monopipe.writeByte(MONO_TYPE_I1)
+    monopipe.writeByte(MONO_TYPE_I1)
     monopipe.writeByte(value)
   elseif vartype == vtWord then
-    -- monopipe.writeByte(MONO_TYPE_I2)
+    monopipe.writeByte(MONO_TYPE_I2)
     monopipe.writeWord(value)
   elseif vartype == vtDword then
-    -- monopipe.writeByte(MONO_TYPE_I4)
+    monopipe.writeByte(MONO_TYPE_I4)
     monopipe.writeDword(value)
   elseif vartype == vtPointer then
-    -- monopipe.writeByte(MONO_TYPE_PTR)
+    monopipe.writeByte(MONO_TYPE_PTR)
     monopipe.writeQword(value)
   elseif vartype == vtQword then
-    -- monopipe.writeByte(MONO_TYPE_I8)
+    monopipe.writeByte(MONO_TYPE_I8)
     monopipe.writeQword(value)
   elseif vartype == vtSingle then
-    -- monopipe.writeByte(MONO_TYPE_R4)
+    monopipe.writeByte(MONO_TYPE_R4)
     monopipe.writeFloat(value)
   elseif vartype == vtDouble then
-    -- monopipe.writeByte(MONO_TYPE_R8)
+    monopipe.writeByte(MONO_TYPE_R8)
     monopipe.writeDouble(value)
   else
-    -- monopipe.writeByte(MONO_TYPE_VOID)
+    monopipe.writeByte(MONO_TYPE_VOID)
+    monopipe.writeQword(value)
   end
   return nil
   
 end
 
+--[[function mono_writeObject(vartype, value)
+  if vartype == vtString then
+   -- monopipe.writeByte(MONO_TYPE_STRING)
+    monopipe.writeWord(#value);
+    monopipe.writeString(value);
+  elseif vartype == vtByte then
+   -- monopipe.writeByte(MONO_TYPE_I1)
+    monopipe.writeByte(value)
+  elseif vartype == vtWord then
+   -- monopipe.writeByte(MONO_TYPE_I2)
+    monopipe.writeWord(value)
+  elseif vartype == vtDword then
+   -- monopipe.writeByte(MONO_TYPE_I4)
+    monopipe.writeDword(value)
+  elseif vartype == vtPointer then
+  -- monopipe.writeByte(MONO_TYPE_PTR)
+    monopipe.writeQword(value)
+  elseif vartype == vtQword then
+ -- monopipe.writeByte(MONO_TYPE_I8)
+    monopipe.writeQword(value)
+  elseif vartype == vtSingle then
+   -- monopipe.writeByte(MONO_TYPE_R4)
+    monopipe.writeFloat(value)
+  elseif vartype == vtDouble then
+   -- monopipe.writeByte(MONO_TYPE_R8)
+    monopipe.writeDouble(value)
+  else
+    --monopipe.writeByte(MONO_TYPE_VOID)
+  end
+  return nil
+  
+end
+]]
 function mono_writeVarType(vartype)
   if vartype == vtString then
     monopipe.writeByte(MONO_TYPE_STRING)
@@ -2649,6 +2824,9 @@ function mono_invoke_method_dialog(domain, method, address)
     end
 
     local params=mono_method_get_parameters(method)
+    if params==nil then
+      return
+    end
 
     --use monoTypeToVartypeLookup to convert it to the type mono_method_invoke likes it
     local args={}
@@ -2712,6 +2890,34 @@ function mono_invoke_method(domain, method, object, args)
   monopipe.lock()
   monopipe.writeByte(MONOCMD_INVOKEMETHOD)
   
+ -- monopipe.writeQword(domain)
+  monopipe.writeQword(method)
+  monopipe.writeQword(object)
+  --monopipe.writeWord(#args)
+ -- for i=1, #args do
+    --mono_writeVarType(args[i].type)
+  --end
+  for i=1, #args do
+    mono_writeObject(args[i].type, args[i].value)
+  end
+  
+  local result=mono_readObject()
+  
+  if monopipe then
+    monopipe.unlock()
+    return result      
+  else
+    --something bad happened
+    LaunchMonoDataCollector()
+    return nil
+  end
+  
+end
+
+--[[function mono_invoke_method(domain, method, object, args)
+  monopipe.lock()
+  monopipe.writeByte(MONOCMD_INVOKEMETHOD)
+  
   monopipe.writeQword(domain)
   monopipe.writeQword(method)
   monopipe.writeQword(object)
@@ -2734,7 +2940,7 @@ function mono_invoke_method(domain, method, object, args)
     return nil
   end
   
-end
+end]]
 
 function mono_loadAssemblyFromFile(fname)
   --if debug_canBreak() then return nil end
@@ -2770,6 +2976,22 @@ function mono_object_init(object)
   local result = monopipe.readByte()==1
   monopipe.unlock()
   return result;  
+end
+
+function mono_new_string(domain, utf8str)
+  if type(domain)=='string' and utf8str==nil then
+    utf8str=domain
+    domain=nil
+  end
+  
+  monopipe.lock()
+  monopipe.writeByte(MONOCMD_NEWSTRING)
+  monopipe.writeQword(domain)
+  monopipe.writeWord(#utf8str)
+  monopipe.writeString(utf8str)
+  local result = monopipe.readQword()
+  monopipe.unlock()
+  return result;    
 end
 
 --[[
@@ -3129,6 +3351,9 @@ end
 
 
 function monoform_context_onpopup(sender)
+  if monopipe==nil then return end  
+  if tonumber(monopipe.ProcessID)~=getOpenedProcessID() then return end
+  
   local node=monoForm.TV.Selected
 
   local methodsEnabled = (node~=nil) and (node.Level==4) and (node.Parent.Text=='methods')
@@ -3617,20 +3842,22 @@ function mono_setMonoMenuItem(usesmono, usesdotnet)
         end
       end
     end
-
-    miMonoTopMenuItem.miMonoActivate.Visible=true
-    miMonoTopMenuItem.miMonoDissect.Visible=true
-    miMonoTopMenuItem.miDotNetSeperator.Visible=true
-      
-    if usesmono and not usesdotnet then
-      miMonoTopMenuItem.Caption=translate("Mono")
-    elseif usesdotnet and not usesmono then  
-      miMonoTopMenuItem.Caption=translate(".Net")
-      miMonoTopMenuItem.miMonoActivate.Visible=false
-      miMonoTopMenuItem.miMonoDissect.Visible=false      
-      miMonoTopMenuItem.miDotNetSeperator.Visible=false
-    else
-      miMonoTopMenuItem.Caption=translate("Mono/.Net")     
+    
+    if miMonoTopMenuItem then
+      miMonoTopMenuItem.miMonoActivate.Visible=true
+      miMonoTopMenuItem.miMonoDissect.Visible=true
+      miMonoTopMenuItem.miDotNetSeperator.Visible=true
+        
+      if usesmono and not usesdotnet then
+        miMonoTopMenuItem.Caption=translate("Mono")
+      elseif usesdotnet and not usesmono then  
+        miMonoTopMenuItem.Caption=translate(".Net")
+        miMonoTopMenuItem.miMonoActivate.Visible=false
+        miMonoTopMenuItem.miMonoDissect.Visible=false      
+        miMonoTopMenuItem.miDotNetSeperator.Visible=false
+      else
+        miMonoTopMenuItem.Caption=translate("Mono/.Net")     
+      end
     end
 
     
@@ -3706,7 +3933,9 @@ function mono_OpenProcessMT()
     end    
   end
   
-  mono_setMonoMenuItem(usesmono, usesdotnet)
+  synchronize(function()
+    mono_setMonoMenuItem(usesmono, usesdotnet)
+  end)
   
   if (usesmono==false) and (getOperatingSystem()==1) and (thread_checkifmonoanyhow==nil) then
     thread_checkifmonoanyhow=createThread(mono_checkifmonoanyhow)
@@ -3715,29 +3944,31 @@ function mono_OpenProcessMT()
 
   if (monopipe~=nil) and (monopipe.ProcessID~=getOpenedProcessID()) then
     --different process
-    monopipe.destroy()
-    monopipe=nil
+    synchronize(function()
+      monopipe.destroy()
+      monopipe=nil
 
-    if mono_AddressLookupID~=nil then
-      unregisterAddressLookupCallback(mono_AddressLookupID)
-      mono_AddressLookupID=nil
-    end
+      if mono_AddressLookupID~=nil then
+        unregisterAddressLookupCallback(mono_AddressLookupID)
+        mono_AddressLookupID=nil
+      end
 
 
-    if mono_SymbolLookupID~=nil then
-      unregisterSymbolLookupCallback(mono_SymbolLookupID)
-      mono_SymbolLookupID=nil
-    end
+      if mono_SymbolLookupID~=nil then
+        unregisterSymbolLookupCallback(mono_SymbolLookupID)
+        mono_SymbolLookupID=nil
+      end
 
-    if mono_StructureNameLookupID~=nil then
-      unregisterStructureNameLookup(mono_StructureNameLookupID)
-      mono_StructureNameLookupID=nil
-    end
+      if mono_StructureNameLookupID~=nil then
+        unregisterStructureNameLookup(mono_StructureNameLookupID)
+        mono_StructureNameLookupID=nil
+      end
 
-    if mono_StructureDissectOverrideID~=nil then
-      unregisterStructureDissectOverride(mono_StructureDissectOverrideID)
-      mono_StructureDissectOverrideID=nil
-    end
+      if mono_StructureDissectOverrideID~=nil then
+        unregisterStructureDissectOverride(mono_StructureDissectOverrideID)
+        mono_StructureDissectOverrideID=nil
+      end
+    end)
   end
 
 end
@@ -3747,8 +3978,18 @@ function mono_OnProcessOpened(processid, processhandle, caption)
   if mono_OldOnProcessOpened~=nil then
     mono_OldOnProcessOpened(processid, processhandle, caption)
   end
+  
+  if mono_OpenProcessMTThread==nil then --don't bother if it exists
+    mono_OpenProcessMTThread=createThread(function(t)       
+      t.Name='mono_OpenProcessMT'
+      --print("mono_OpenProcessMTThread")
+      mono_OpenProcessMT(t)
+      mono_OpenProcessMTThread=nil
+      --print("mono_OpenProcessMTThread finished")
+    end)  
+  end
 
-  mono_OpenProcessMT()
+  
 end
 
 function monoAA_USEMONO(parameters, syntaxcheckonly)
@@ -4652,6 +4893,8 @@ end
 
 function mono_initialize()
   --register a function to be called when a process is opened
+  monoSettings=getSettings("MonoExtension")  
+  
   if (mono_init1==nil) then
     mono_init1=true
     mono_OldOnProcessOpened=MainForm.OnProcessOpened

@@ -17,7 +17,9 @@ uses
   ceguicomponents,formdesignerunit,xmlutils,vartypestrings,plugin,byteinterpreter,
   MenuItemExtra,frmgroupscanalgoritmgeneratorunit
 
-  , macport,LCLVersion, UTF8Process, macportdefines, fgl, betterControls;     //last one
+  , macport,LCLVersion, UTF8Process, macportdefines, fgl, networkInterfaceApi,
+  networkInterface,
+  betterControls;     //last one
   {$endif}
 
   {$ifdef windows}
@@ -312,6 +314,14 @@ type
     andlabel: TLabel;
     lblcompareToSavedScan: TLabel;
     MenuItem16: TMenuItem;
+    MenuItem17: TMenuItem;
+    MenuItem18: TMenuItem;
+    miNetworkReadUseProcMem: TMenuItem;
+    miNetworkReadUsePtrace: TMenuItem;
+    miNetworkReadUseVmread: TMenuItem;
+    miNetworkWriteUseProcMem: TMenuItem;
+    miNetworkWriteUsePtrace: TMenuItem;
+    miNetworkWriteUseVmWrite: TMenuItem;
     miDeleteSavedScanResults: TMenuItem;
     miOnlyShowCurrentCompareToColumn: TMenuItem;
     miLoadRecent: TMenuItem;
@@ -566,7 +576,6 @@ type
     procedure Copyselectedaddresses1Click(Sender: TObject);
     procedure EnableLCLClick(Sender: TObject);
     procedure cbFastScanChange(Sender: TObject);
-    procedure cbUnrandomizerChange(Sender: TObject);
     procedure Description1Click(Sender: TObject);
     procedure edtAlignmentKeyPress(Sender: TObject; var Key: char);
     procedure FormDropFiles(Sender: TObject; const FileNames: array of string);
@@ -577,8 +586,6 @@ type
       Item: TListItem; SubItem: Integer; State: TCustomDrawState;
       var DefaultDraw: Boolean);
     procedure CreateGroupClick(Sender: TObject);
-    procedure Foundlist3SelectItem(Sender: TObject; Item: TListItem;
-      Selected: boolean);
     procedure gbScanOptionsChangeBounds(Sender: TObject);
     procedure Label3Click(Sender: TObject);
     procedure MenuItem12Click(Sender: TObject);
@@ -594,6 +601,8 @@ type
     procedure miChangeValueBackClick(Sender: TObject);
     procedure miDBVMFindWhatWritesOrAccessesClick(Sender: TObject);
     procedure miAlwaysHideChildrenClick(Sender: TObject);
+    procedure miNetworkClick(Sender: TObject);
+    procedure miNetworkReadUseProcMemClick(Sender: TObject);
     procedure miOnlyShowCurrentCompareToColumnClick(Sender: TObject);
     procedure miSignTableClick(Sender: TObject);
     procedure miAsyncScriptClick(Sender: TObject);
@@ -653,13 +662,9 @@ type
     procedure miWireframeClick(Sender: TObject);
     procedure miZbufferClick(Sender: TObject);
     procedure miZeroTerminateClick(Sender: TObject);
-    procedure ools1Click(Sender: TObject);
-    procedure Panel1Click(Sender: TObject);
     procedure Panel5Resize(Sender: TObject);
     procedure pmTablistPopup(Sender: TObject);
     procedure pmValueTypePopup(Sender: TObject);
-    procedure ProcessLabelClick(Sender: TObject);
-    procedure rbAllMemoryChange(Sender: TObject);
     procedure rbFsmAlignedChange(Sender: TObject);
     procedure rtChange(Sender: TObject);
     procedure Save1Click(Sender: TObject);
@@ -695,8 +700,6 @@ type
     procedure Removeselectedaddresses1Click(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure CommentButtonClick(Sender: TObject);
-    procedure CommentButtonMouseMove(Sender: TObject; Shift: TShiftState;
-      X, Y: integer);
     procedure Copy1Click(Sender: TObject);
     procedure Cut1Click(Sender: TObject);
     procedure Paste1Click(Sender: TObject);
@@ -713,8 +716,6 @@ type
     procedure Copy2Click(Sender: TObject);
     procedure Paste2Click(Sender: TObject);
     procedure ccpmenuPopup(Sender: TObject);
-    procedure Splitter1CanResize(Sender: TObject; var NewSize: integer;
-      var Accept: boolean);
     procedure Splitter1Moved(Sender: TObject);
     procedure SettingsClick(Sender: TObject);
     procedure cbCaseSensitiveClick(Sender: TObject);
@@ -739,7 +740,6 @@ type
     procedure Forcerechecksymbols1Click(Sender: TObject);
     procedure Smarteditaddresses1Click(Sender: TObject);
     procedure Pointerscanforthisaddress1Click(Sender: TObject);
-    procedure Label53Click(Sender: TObject);
     procedure Foundlist3Data(Sender: TObject; Item: TListItem);
     procedure UpdateFoundlisttimerTimer(Sender: TObject);
     procedure Foundlist3KeyDown(Sender: TObject; var Key: word; Shift: TShiftState);
@@ -852,6 +852,9 @@ type
     RecentFiles: Tstringlist;
 
     InsideSetActivePreviousResult: boolean;
+
+    procedure updateNetworkOption(sender: TObject);
+    procedure updateNetworkOptions;
 
     procedure ClearRecentFiles(Sender:TObject);
     procedure RecentFilesClick(Sender:TObject);
@@ -1103,7 +1106,7 @@ uses cefuncproc, MainUnit2, ProcessWindowUnit, MemoryBrowserFormUnit, TypePopup,
   PointerscanresultReader, Parsers, Globals {$ifdef windows},GnuAssembler, xinput{$endif} ,DPIHelper,
   multilineinputqueryunit {$ifdef windows},winsapi{$endif} ,LuaClass, Filehandler{$ifdef windows}, feces{$endif}
   {$ifdef windows},frmDBVMWatchConfigUnit, frmDotNetObjectListUnit{$endif} ,ceregistry ,UnexpectedExceptionsHelper
-  ,frmFoundlistPreferencesUnit, fontSaveLoadRegistry{$ifdef windows}, cheatecoins{$endif},strutils;
+  ,frmFoundlistPreferencesUnit, fontSaveLoadRegistry{$ifdef windows}, cheatecoins{$endif},strutils, iptlogdisplay;
 
 resourcestring
   rsInvalidStartAddress = 'Invalid start address: %s';
@@ -1326,6 +1329,7 @@ resourcestring
   rsEnableSpeedHack = 'Enable '+strSpeedHack;
   rsPreviousValueList = 'Previous value list';
   rsSelectTheSavedResult = 'Select the saved results you wish to use';
+  rsNetworkOption = 'Network option :';
 
 const
   VARTYPE_INDEX_BINARY=0;
@@ -2920,6 +2924,9 @@ var
   DoNotOpenAssociatedTable: boolean;
   //set to true if the table had AA scripts enabled or the code list had nopped instruction
 begin
+  if getConnection<>nil then
+    updateNetworkOptions;
+
   {$ifdef windows}
   if aprilfools then decreaseCheatECoinCount;
   {$endif}
@@ -2943,7 +2950,9 @@ begin
 
   if processid = $FFFFFFFF then
   begin
-    processlabel.Caption := strPhysicalMemory;
+    if ProcessHandler.ProcessHandle<>QWORD(-2) then
+      processlabel.Caption := strPhysicalMemory;
+
     cbPauseWhileScanning.visible:=false;
 
     if cbsaferPhysicalMemory=nil then
@@ -3024,7 +3033,8 @@ begin
     end
     else
     begin
-      processlabel.Caption := strPhysicalMemory;
+      if processhandle<>qword(-2) then
+        processlabel.Caption := strPhysicalMemory;
     end;
 
     UpdateScanType;
@@ -3189,10 +3199,6 @@ begin
   openProcessEpilogue(oldprocessname, oldprocess, oldprocesshandle);
 end;
 
-procedure TMainForm.rbAllMemoryChange(Sender: TObject);
-begin
-
-end;
 
 procedure TMainForm.rbFsmAlignedChange(Sender: TObject);
 begin
@@ -3563,13 +3569,6 @@ begin
   VarType.OnChange(vartype);
 end;
 
-procedure TMainForm.cbUnrandomizerChange(Sender: TObject);
-begin
-
-end;
-
-
-
 
 procedure TMainForm.CreateGroupClick(Sender: TObject);
 var
@@ -3593,26 +3592,16 @@ begin
   end;
 end;
 
-procedure TMainForm.Foundlist3SelectItem(Sender: TObject; Item: TListItem;
-  Selected: boolean);
-begin
-
-end;
-
 procedure TMainForm.gbScanOptionsChangeBounds(Sender: TObject);
-
 begin
-
   spawnBoundsUpdater;
-
-
 end;
 
 procedure TMainForm.Label3Click(Sender: TObject);
-
 begin
 
 end;
+
 
 procedure TMainForm.MenuItem16Click(Sender: TObject);
 {$ifdef darwin}
@@ -3687,6 +3676,7 @@ var
 
   tobedeleted: string;
 begin
+  tobedeleted:='';
   s:=tstringlist.create;
   i:=memscan.getsavedresults(s);
   if i=1 then exit;
@@ -3706,9 +3696,9 @@ begin
   if compareToSavedScan and (currentlySelectedSavedResultname=tobedeleted) then
     cbCompareToSavedScan.checked:=false;
 
+  if tobedeleted<>'' then
+    memscan.deleteSavedResult(tobedeleted);
 
-
-  memscan.deleteSavedResult(tobedeleted);
   reloadPreviousResults;
 end;
 
@@ -5488,17 +5478,6 @@ begin
       addresslist.selectedRecord.Extra.stringData.ZeroTerminate;
 end;
 
-procedure TMainForm.ools1Click(Sender: TObject);
-begin
-
-end;
-
-procedure TMainForm.Panel1Click(Sender: TObject);
-begin
-
-end;
-
-
 procedure TMainForm.Panel5Resize(Sender: TObject);
 var
   widthleft,w,aw: integer;
@@ -5583,10 +5562,6 @@ begin
 
 end;
 
-procedure TMainForm.ProcessLabelClick(Sender: TObject);
-begin
-
-end;
 
 procedure TMainForm.miShowCustomTypeDebugClick(Sender: TObject);
 var ct: TCustomType;
@@ -5780,6 +5755,10 @@ var
   createlog: boolean;
   s: string;
 begin
+  mtid:=MainThreadID;
+
+  tthread.NameThreadForDebugging('Main GUI Thread', GetCurrentThreadId);
+
   PreviousResultList:=TPreviousResultList.Create;
 
 
@@ -7339,6 +7318,11 @@ begin
     miAutoAssembleErrorMessage.visible:=selectedrecord.LastAAExecutionFailed;
     if selectedrecord.LastAAExecutionFailed then
       miAutoAssembleErrorMessage.Caption:='<<'+selectedrecord.LastAAExecutionFailedReason+'>>';
+  end
+  else
+  begin
+    miAutoAssembleErrorMessage.visible:=false;
+    miAutoAssembleErrorMessage.Caption:='';
   end;
 end;
 
@@ -7639,18 +7623,33 @@ begin
     pluginhandler.free;
     pluginhandler:=nil;
   end;
+
+
+
+  if formsettings.cbSaveMemoryregionScanSettings.checked then
+  begin
+    //save to the registry
+    reg:=tregistry.Create;
+    try
+      Reg.RootKey := HKEY_CURRENT_USER;
+      if Reg.OpenKey('\Software\'+strCheatEngine,true) then
+      begin
+        reg.WriteInteger('scan CopyOnWrite', integer(cbCopyOnWrite.State));
+        reg.WriteInteger('scan Executable', integer(cbExecutable.State));
+        reg.WriteInteger('scan Writable', integer(cbWritable.State));
+      end;
+    except
+
+    end;
+
+    reg.free;
+  end;
 end;
 
 
 procedure TMainForm.CommentButtonClick(Sender: TObject);
 begin
   comments.Show;
-end;
-
-procedure TMainForm.CommentButtonMouseMove(Sender: TObject; Shift: TShiftState;
-  X, Y: integer);
-begin
-
 end;
 
 procedure TMainForm.CopySelectedRecords;
@@ -7819,6 +7818,182 @@ begin
     else
       addresslist.selectedRecord.options := addresslist.selectedRecord.options - [moAlwaysHideChildren];
   end;
+end;
+
+procedure TMainForm.miNetworkClick(Sender: TObject);
+begin
+  updateNetworkOptions;
+end;
+
+type
+  TCEServerOptionMenuItemData=class
+    data: TCEServerOption;
+  end;
+
+  TCEServerOptionMenuItemValue=class
+    value: string;
+  end;
+
+procedure TMainForm.updateNetworkOption(sender: TObject);
+var
+  mi: TMenuItem absolute sender;
+  data:  TCEServerOptionMenuItemData;
+  value: TCEServerOptionMenuItemValue;
+  v: string;
+  c: TCEConnection;
+begin
+
+  if (sender is TMenuItem) then
+  begin
+    if tobject(mi.tag) is TCEServerOptionMenuItemValue then
+    begin
+      value:=TCEServerOptionMenuItemValue(mi.tag);
+      data:=TCEServerOptionMenuItemData(mi.Parent.Tag);
+
+      v:=value.value;
+
+      c:=getConnection;
+      if c<>nil then
+      begin
+        c.setOption(data.data.optname, v);
+      end;
+    end
+    else
+    begin
+      data:=TCEServerOptionMenuItemData(mi.tag);
+      if data.data.optiontype=netBoolean then
+      begin
+        if mi.checked then v:='1' else v:='0';
+      end
+      else
+      begin
+        v:=data.data.currentvalue;
+        if InputQuery(rsNetworkOption+data.data.optname, rsChangeValue, v)<>true
+          then exit;
+      end;
+
+      c:=getConnection;
+      if c<>nil then
+      begin
+        c.setOption(data.data.optname, v);
+        data.data.currentvalue:=c.getOption(data.data.optname);
+
+        mi.OnClick:=nil;
+        if data.data.optiontype=netBoolean then
+          mi.checked:=data.data.currentvalue='1'
+        else
+          mi.caption:=data.data.optdescription+' : '+data.data.currentvalue;
+
+        mi.OnClick:=updateNetworkOption;
+      end;
+    end;
+  end;
+end;
+
+procedure TMainForm.updateNetworkOptions;
+var
+  i,j: integer;
+  ol: TCEServerOptions;
+
+  mi: TMenuItem;
+  smi: TMenuItem;
+  data: TCEServerOptionMenuItemData;
+  value: TCEServerOptionMenuItemValue;
+  sl: TStringlist;
+
+  v: array of string;
+begin
+  //fetch the current available ceserver options, and show them in the menu
+  while miNetwork.Count>3 do
+  begin
+    if tobject(miNetwork.items[3].Tag) is TObject then
+      TObject(miNetwork.items[3].Tag).free;
+
+    miNetwork.Items[3].Free;
+  end;
+
+  ol:=[];
+  getConnection.getOptions(ol);
+
+  for i:=0 to length(ol)-1 do
+  begin
+    mi:=TMenuItem.Create(self);
+    mi.Caption:=ol[i].optdescription;
+
+    data:=TCEServerOptionMenuItemData.create;
+    data.data:=ol[i];
+    mi.Tag:=ptruint(data);
+
+
+    if ol[i].optiontype=netParent then
+    begin
+      //nothing else
+    end
+    else
+    begin
+      mi.onclick:=updateNetworkOption;
+      if ol[i].optiontype=netBoolean then
+      begin
+        mi.AutoCheck:=true;
+        mi.checked:=ol[i].currentvalue='1';
+      end
+      else
+      begin
+
+        if ol[i].acceptablevalues<>'' then
+        begin
+          mi.onclick:=nil;
+          //turn the options into subitems
+          sl:=TStringList.Create;
+          sl.LineBreak:=';';
+          sl.Text:=ol[i].acceptablevalues;
+
+          for j:=0 to sl.Count-1 do
+          begin
+            v:=sl[j].Split('=');
+            value:=TCEServerOptionMenuItemValue.Create;
+            value.value:=v[0];
+
+            smi:=TMenuItem.create(self);
+            smi.Caption:=v[1];
+            smi.RadioItem:=true;
+            smi.GroupIndex:=i+1;
+            smi.checked:=ol[i].currentvalue=v[0];
+            smi.tag:=ptruint(value);
+            smi.AutoCheck:=true;
+
+            smi.onclick:=updateNetworkOption;
+
+            mi.Add(smi);
+          end;
+
+          sl.free;
+        end
+        else
+          mi.caption:=mi.caption+' : '+ol[i].currentvalue;
+      end;
+    end;
+
+    if ol[i].parentoptname<>'' then
+    begin
+      for j:=0 to miNetwork.count-1 do
+      begin
+        if (tobject(miNetwork.items[j].Tag) is TCEServerOptionMenuItemData) and (TCEServerOptionMenuItemData(miNetwork.items[j].Tag).data.optname=ol[i].parentoptname) then
+        begin
+          miNetwork.items[j].Add(mi);
+          break;
+        end;
+      end;
+    end
+    else
+      miNetwork.Add(mi);
+  end;
+
+end;
+
+procedure TMainForm.miNetworkReadUseProcMemClick(Sender: TObject);
+begin
+
 end;
 
 procedure TMainForm.miOnlyShowCurrentCompareToColumnClick(Sender: TObject);
@@ -8673,12 +8848,6 @@ begin
   checkpaste;
 end;
 
-procedure TMainForm.Splitter1CanResize(Sender: TObject; var NewSize: integer;
-  var Accept: boolean);
-begin
-
-end;
-
 procedure TMainForm.Splitter1Moved(Sender: TObject);
 begin
   panel5.Repaint;
@@ -8688,16 +8857,20 @@ procedure TMainForm.SettingsClick(Sender: TObject);
 var
 
   oldScanDone, oldInitialScanDone, oldScanStart: TNotifyEvent;
+  oldKernelQueryMemoryRegion, oldKernelReadWriteProcessMemory, oldKernelOpenProcess: boolean;
 begin
 
   suspendhotkeyhandler;
 
 
+  oldKernelQueryMemoryRegion:=formsettings.cbKernelQueryMemoryRegion.Checked;
+  oldKernelReadWriteProcessMemory:=formsettings.cbKernelReadWriteProcessMemory.Checked;
+  oldKernelOpenProcess:=formsettings.cbKernelOpenProcess.Checked;
 
   if formsettings.ShowModal <> mrOk then
   begin
     resumehotkeyhandler;
-    LoadSettingsFromRegistry(true);
+    LoadSettingsFromRegistry(true, true);
     exit;
   end;
 
@@ -8706,18 +8879,29 @@ begin
 
   {$ifdef windows}
 
-  if formsettings.cbKernelQueryMemoryRegion.Checked then
-    UseDBKQueryMemoryRegion
-  else
-    DontUseDBKQueryMemoryRegion;
-  if formsettings.cbKernelReadWriteProcessMemory.Checked then
-    UseDBKReadWriteMemory
-  else
-    DontUseDBKReadWriteMemory;
-  if formsettings.cbKernelOpenProcess.Checked then
-    UseDBKOpenProcess
-  else
-    DontUseDBKOpenProcess;
+  if oldKernelQueryMemoryRegion<>formsettings.cbKernelQueryMemoryRegion.Checked then
+  begin
+    if formsettings.cbKernelQueryMemoryRegion.Checked then
+      UseDBKQueryMemoryRegion
+    else
+      DontUseDBKQueryMemoryRegion;
+  end;
+
+  if oldKernelReadWriteProcessMemory<>formsettings.cbKernelReadWriteProcessMemory.Checked then
+  begin
+    if formsettings.cbKernelReadWriteProcessMemory.Checked then
+      UseDBKReadWriteMemory
+    else
+      DontUseDBKReadWriteMemory;
+  end;
+
+  if oldKernelOpenProcess<>formsettings.cbKernelOpenProcess.Checked then
+  begin
+    if formsettings.cbKernelOpenProcess.Checked then
+      UseDBKOpenProcess
+    else
+      DontUseDBKOpenProcess;
+  end;
   {$endif}
 
   adjustbringtofronttext;
@@ -8969,6 +9153,7 @@ begin
     try
       LoadTable(Opendialog1.filename, merge);
       SaveDialog1.filename:=Opendialog1.filename;
+      SaveDialog1.InitialDir:=opendialog1.InitialDir;
 
       UserDefinedTableName:=Opendialog1.filename;
       reinterpretaddresses;
@@ -9013,6 +9198,7 @@ begin
 
     saveGotCanceled:=false;
     opendialog1.FileName := savedialog1.filename;
+    opendialog1.InitialDir:=savedialog1.InitialDir;
     SaveIntialTablesDir(extractfilepath(savedialog1.filename));
 
     UserDefinedTableName:=savedialog1.filename;
@@ -9279,16 +9465,6 @@ begin
     frmPointerScanner.Method3Fastspeedandaveragememoryusage1.Click;
 
   end;
-end;
-
-procedure testx(arg1: pointer; arg2: pointer; arg3: pointer); stdcall;
-begin
-
-end;
-
-procedure TMainForm.Label53Click(Sender: TObject);
-begin
-
 end;
 
 procedure TMainForm.OnToolsClick(Sender: TObject);
@@ -9619,10 +9795,7 @@ procedure TMainForm.UpdateFoundlisttimerTimer(Sender: TObject);
 begin
 
   if foundlist <> nil then
-  begin
     foundlist.RefetchValueList;
-    foundlist3.Refresh;
-  end;
 end;
 
 procedure TMainForm.Foundlist3KeyDown(Sender: TObject; var Key: word;
@@ -10467,6 +10640,8 @@ begin
   end;
 
 
+
+
 end;
 
 procedure TMainForm.tbSpeedChange(Sender: TObject);
@@ -10554,9 +10729,11 @@ begin
     except
       on e: Exception do
       begin
+        outputdebugstring('Normal speedhack activation failed. Checking for :"activateAlternateSpeedhack"');
         lua_getglobal(luavm, 'activateAlternateSpeedhack');//failure. check if there is an alternative in lua
         if lua_isfunction(luavm,-1) then
         begin
+          OutputDebugString('Calling activateAlternateSpeedhack');
           lua_pushboolean(luavm,true);
           lua_pcall(luavm, 1,0,0);
           exit;
@@ -10593,6 +10770,7 @@ var
 
   tempicon: Graphics.TIcon;
   tempp: tpicture;
+  p: integer;
 
 begin
   //fill with processlist
@@ -10615,11 +10793,21 @@ begin
       j := sl.Count - 1 - i;
       currentmi := TMenuItemExtra.Create(self);
       currentmi.Caption := sl[i];
-      currentmi.Default := dword(sl.Objects[i]) = ProcessID;
+      {$ifdef windows}
+      currentmi.Default := dword(ptrUint(PProcessListInfo(sl.Objects[i])^.processid)) = ProcessID;
       currentmi.Data := pointer(ptrUint(PProcessListInfo(sl.Objects[i])^.processid));
+      {$else}
+      if TryStrToInt('$'+copy(sl[i],1,pos('-',sl[i])), p) then
+      begin
+        currentmi.Data := pointer(p);
+        currentmi.default:=p=processid;
+      end;
+      {$endif}
+
       currentmi.OnClick := ProcessItemClick;
 
 
+      {$IFDEF WINDOWS}
       if PProcessListInfo(sl.Objects[i])^.processIcon > 0 then
       begin
         tempicon := Graphics.TIcon.Create;
@@ -10633,6 +10821,7 @@ begin
         tempicon.free;
       end
       else
+      {$ENDIF}
         currentmi.ImageIndex := -1;
 
       mi[j] := currentmi;

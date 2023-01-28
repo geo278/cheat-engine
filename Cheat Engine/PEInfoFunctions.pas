@@ -12,7 +12,7 @@ interface
 
 uses
   {$ifdef windows}
-  windows,
+  jwawindows, windows,
   {$endif}
   LCLIntf,SysUtils,classes, CEFuncProc,NewKernelHandler,FileMapping, commonTypeDefs;
 
@@ -315,13 +315,12 @@ type
     function getCount: integer;
   public
     function getRunTimeEntry(address: ptruint): PRuntimeEntry;
+    function isvalid(index: integer): boolean;
     constructor create(modulebase: ptruint; ela: ptruint; els: integer);
     destructor destroy; override;
     property ModuleBase: ptruint read fModuleBase;
     property Count: integer read getCount;
     property Entry[index: integer]: TRunTimeEntry read getEntry; default;
-
-
   end;
 
 
@@ -457,6 +456,10 @@ begin
   end;
 end;
 
+function TExceptionList.isvalid(index: integer): boolean;
+begin
+
+end;
 
 function TExceptionList.getEntry(index: integer): TRunTimeEntry;
 begin
@@ -604,6 +607,8 @@ var
   ar:ptruint;
 
   imagesize: dword;
+
+  ordcount: integer;
 begin
   result:=false;
 
@@ -654,13 +659,14 @@ begin
     if (ptruint(addresslist)<=ptruint(header)) or (ptruint(addresslist)>=(ptruint(header)+imagesize)) then
       raise exception.create(rsPEIFNoExports);
 
+    ordcount:=ImageExportDirectory.NumberOfFunctions-ImageExportDirectory.NumberOfNames;
 
     for i:=0 to ImageExportDirectory.NumberOfNames-1 do
     begin
       functionname:=pchar(ptruint(header)+exportlist[i]);
 
       if functionname<>nil then
-        dllList.AddObject(functionname, pointer(ptruint(modulebase+addresslist[i])));
+        dllList.AddObject(functionname, pointer(ptruint(modulebase+addresslist[i+ordcount])));
     end;
     result:=true;
   finally
