@@ -47,6 +47,8 @@ Cheat Engine is a development environment focused on modding games and applicati
       * you can also click on `Run->Compile many Modes` (tip: select first three compile modes)
       * If you want to run or debug from the IDE on Windows you will need to run Lazarus as administrator.
 
+  USE THIS VERSION: https://sourceforge.net/projects/lazarus/files/Lazarus%20Windows%2064%20bits/Lazarus%202.0.12/
+
 ## Contributing
 
 If you wish to contribute:
